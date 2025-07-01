@@ -1,0 +1,48 @@
+{
+  "developer_account": {
+    "sim": {
+      "developer_id": "20459423",
+      "developer_password": "Aaaa1111!"
+    },
+    "live": {
+      "developer_id": "20459423",
+      "developer_password": "Akky0942!"
+    }
+  },
+  "application": {
+    "sim": {
+      "app_key": "5f19317941744e688ca30be6b2f53659",
+      "app_secret": "7e7f99b6a65343ebae16c915daddff80"
+    },
+    "live": {
+      "app_key": "67a87ac462994c4b805a0811aa966a50",
+      "app_secret": "950d065d7a3145c5800abd730ff43eaf"
+    }
+  },
+  "trading": {
+    "is_live_mode": false,
+    "leverage": 20,
+    "autolot": true,
+    "max_error_count": 5,
+    "lot_size": 0.1
+  },
+  "notification": {
+    "discord_webhook_url": "https://discord.com/api/webhooks/1389148191882215555/STY2EhlVP0wlVQECDybXDWBbS-m5pgc7LfAnUR8M-o7r6JHcafh0SvEr9UKJd0-cl4-y"
+  },
+  "spreadsheets": {
+    "config_url": "",
+    "entrypoints_url": "https://docs.google.com/spreadsheets/d/17GdaxR8q0qTx19TOWva62ksdRWIxHrmRZkwXz6lTfgM/edit?gid=0"
+  },
+  "oauth": {
+    "live": {
+      "auth_endpoint": "https://live.logonvalidation.net/authorize",
+      "token_endpoint": "https://live.logonvalidation.net/token",
+      "redirect_uri": "http://localhost:8080/callback"
+    },
+    "sim": {
+      "auth_endpoint": "https://sim.logonvalidation.net/authorize",
+      "token_endpoint": "https://sim.logonvalidation.net/token",
+      "redirect_uri": "http://localhost:8080/callback"
+    }
+  }
+} 
