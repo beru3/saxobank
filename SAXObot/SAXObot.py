@@ -2015,8 +2015,13 @@ async def process_entrypoint(entrypoint, config, bot, trade_results):
     main_volume = None
     
     try:
-        # エントリー時刻10秒前まで待機
-        await SAXOlib.wait_until(entrypoint["entry_time"], 10)
+        # エントリー時刻10秒前まで待機（時刻が過ぎている場合はスキップ）
+        try:
+            await SAXOlib.wait_until(entrypoint["entry_time"], 10, raise_exception=False)
+        except ValueError as e:
+            print(f"⚠️ エントリー時刻を超過しています: {entrypoint['entry_time'].strftime('%H:%M:%S')} - {str(e)}")
+            logging.warning(f"エントリー時刻超過: {entrypoint['entry_time'].strftime('%H:%M:%S')} - {str(e)}")
+            return  # このエントリーポイントをスキップ
         
         print(f"** エントリー開始: {entrypoint['entry_time'].strftime('%H:%M:%S')}-{entrypoint['exit_time'].strftime('%H:%M:%S')}({entrypoint['ticker']} {entrypoint['direction']} size{entrypoint['amount']} 指値{entrypoint['LimitRate']} 逆指値{entrypoint['StopRate']} {entrypoint['memo']})")
         logging.info(f"** EntryPoint: {entrypoint['entry_time'].strftime('%H:%M:%S')}-{entrypoint['exit_time'].strftime('%H:%M:%S')}({entrypoint['ticker']} {entrypoint['direction']} size{entrypoint['amount']} 指値{entrypoint['LimitRate']} 逆指値{entrypoint['StopRate']} {entrypoint['memo']})")
@@ -3211,8 +3216,30 @@ async def run():
                 # 取引結果を記録するリスト
                 trade_results = []
                 
-                # 各エントリーポイントを処理
+                # 現在時刻を取得
+                current_time = datetime.now()
+                
+                # 現在時刻以降のエントリーポイントのみを処理
+                future_entrypoints = []
                 for entrypoint in entrypoints:
+                    if entrypoint["entry_time"] > current_time:
+                        future_entrypoints.append(entrypoint)
+                    else:
+                        print(f"⏰ スキップ: {entrypoint['entry_time'].strftime('%H:%M:%S')} {entrypoint['ticker']} {entrypoint['direction']} (時刻超過)")
+                
+                if not future_entrypoints:
+                    print("⚠️ 処理可能なエントリーポイントがありません（すべて時刻超過）")
+                    if discord_key:
+                        await SAXOlib.send_discord_message(
+                            discord_key, 
+                            f"⚠️ すべてのエントリーポイントが時刻超過のため処理を終了します"
+                        )
+                    break
+                
+                print(f"処理対象エントリーポイント数: {len(future_entrypoints)}")
+                
+                # 各エントリーポイントを処理
+                for entrypoint in future_entrypoints:
                     # ロットサイズの設定（エントリーポイントに指定がなければ設定ファイルの値を使用）
                     if entrypoint.get("amount", 0) <= 0:
                         entrypoint["amount"] = lot_size

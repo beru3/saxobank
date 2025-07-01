@@ -418,12 +418,16 @@ async def wait_until(target_time: datetime, preparation_time: int = 0, raise_exc
     Args:
         target_time (datetime): 目標時間。
         preparation_time (int, optional): 準備時間（秒）。デフォルトは0。
+        raise_exception (bool): 時刻超過時に例外を発生させるかどうか。デフォルトはTrue。
     """
     sleep_seconds = (target_time - timedelta(seconds=preparation_time) - datetime.now()).total_seconds()
     if sleep_seconds > 0:
         await asyncio.sleep(sleep_seconds)
     elif raise_exception:
         raise ValueError(f'エントリ－時間を超過している({sleep_seconds}秒)')
+    else:
+        # 時刻が過ぎているが例外を発生させない場合
+        logger.warning(f'エントリー時間を超過している({sleep_seconds}秒) - スキップします')
 
 #==========================================
 # 時刻変換ユーティリティ（修正版）
