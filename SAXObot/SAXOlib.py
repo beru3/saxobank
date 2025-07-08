@@ -435,8 +435,8 @@ async def wait_until(target_time: datetime, preparation_time: int = 0, raise_exc
 async def convert_nums_to_datetime(
         hour: int, minute: int, second: int) -> datetime:
     """
-    与えられた時、分、秒を使用して日時オブジェクトを生成します。現在の日付を使用し、
-    指定された時刻が現在時刻を過ぎている場合、次の日の日付を使用します。
+    与えられた時、分、秒を使用して日時オブジェクトを生成します。
+    常に現在の日付を使用し、過去の時刻でも翌日に設定しません。
     
     Parameters:
     - hour (int): 時
@@ -459,12 +459,12 @@ async def convert_nums_to_datetime(
     # デバッグログ
     logger.debug(f"現在時刻: {now}, 指定時刻: {hour}:{minute}:{second}")
     
+    # 常に現在の日付を使用
     specified_time = datetime(now.year, now.month, now.day, hour, minute, second)
     
-    # 過去の時刻の場合は翌日に設定
+    # 過去の時刻かどうかをログに記録
     if now > specified_time:
-        specified_time += timedelta(days=1)
-        logger.debug(f"過去の時刻のため翌日に設定: {specified_time}")
+        logger.debug(f"過去の時刻ですが、現在の日付のまま使用します: {specified_time}")
     
     return specified_time
 

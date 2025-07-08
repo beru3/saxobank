@@ -2015,13 +2015,23 @@ async def process_entrypoint(entrypoint, config, bot, trade_results):
     main_volume = None
     
     try:
-        # エントリー時刻10秒前まで待機（時刻が過ぎている場合はスキップ）
-        try:
-            await SAXOlib.wait_until(entrypoint["entry_time"], 10, raise_exception=False)
-        except ValueError as e:
-            print(f"⚠️ エントリー時刻を超過しています: {entrypoint['entry_time'].strftime('%H:%M:%S')} - {str(e)}")
-            logging.warning(f"エントリー時刻超過: {entrypoint['entry_time'].strftime('%H:%M:%S')} - {str(e)}")
-            return  # このエントリーポイントをスキップ
+        # エントリー時間と現在時刻を比較
+        now = datetime.now()
+        entry_time = entrypoint["entry_time"]
+        time_diff = (entry_time - now).total_seconds()
+        
+        if time_diff > 0:
+            # エントリー時間が未来の場合、その時間まで待機（10秒前から準備）
+            print(f"エントリー時間 {entry_time.strftime('%H:%M:%S')} まで待機します（あと {time_diff:.0f} 秒）")
+            try:
+                await SAXOlib.wait_until(entry_time, 10, raise_exception=False)
+            except ValueError as e:
+                print(f"⚠️ 待機中にエラーが発生しました: {str(e)}")
+                logging.warning(f"待機エラー: {str(e)}")
+        else:
+            # エントリー時間が過去の場合でも処理を続行
+            print(f"⚠️ エントリー時間 {entry_time.strftime('%H:%M:%S')} は既に {abs(time_diff):.0f} 秒前に過ぎていますが、処理を続行します")
+            logging.warning(f"エントリー時間超過: {entry_time.strftime('%H:%M:%S')} ({abs(time_diff):.0f} 秒前) - 処理を続行します")
         
         print(f"** エントリー開始: {entrypoint['entry_time'].strftime('%H:%M:%S')}-{entrypoint['exit_time'].strftime('%H:%M:%S')}({entrypoint['ticker']} {entrypoint['direction']} size{entrypoint['amount']} 指値{entrypoint['LimitRate']} 逆指値{entrypoint['StopRate']} {entrypoint['memo']})")
         logging.info(f"** EntryPoint: {entrypoint['entry_time'].strftime('%H:%M:%S')}-{entrypoint['exit_time'].strftime('%H:%M:%S')}({entrypoint['ticker']} {entrypoint['direction']} size{entrypoint['amount']} 指値{entrypoint['LimitRate']} 逆指値{entrypoint['StopRate']} {entrypoint['memo']})")
@@ -3219,27 +3229,12 @@ async def run():
                 # 現在時刻を取得
                 current_time = datetime.now()
                 
-                # 現在時刻以降のエントリーポイントのみを処理
-                future_entrypoints = []
-                for entrypoint in entrypoints:
-                    if entrypoint["entry_time"] > current_time:
-                        future_entrypoints.append(entrypoint)
-                    else:
-                        print(f"⏰ スキップ: {entrypoint['entry_time'].strftime('%H:%M:%S')} {entrypoint['ticker']} {entrypoint['direction']} (時刻超過)")
-                
-                if not future_entrypoints:
-                    print("⚠️ 処理可能なエントリーポイントがありません（すべて時刻超過）")
-                    if discord_key:
-                        await SAXOlib.send_discord_message(
-                            discord_key, 
-                            f"⚠️ すべてのエントリーポイントが時刻超過のため処理を終了します"
-                        )
-                    break
-                
-                print(f"処理対象エントリーポイント数: {len(future_entrypoints)}")
+                # すべてのエントリーポイントを処理対象とする
+                print(f"\n処理対象エントリーポイント数: {len(entrypoints)}")
+                print("注意: 過去の時間のエントリーポイントも処理します")
                 
                 # 各エントリーポイントを処理
-                for entrypoint in future_entrypoints:
+                for entrypoint in entrypoints:
                     # ロットサイズの設定（エントリーポイントに指定がなければ設定ファイルの値を使用）
                     if entrypoint.get("amount", 0) <= 0:
                         entrypoint["amount"] = lot_size
