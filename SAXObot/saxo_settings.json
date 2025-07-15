@@ -24,10 +24,10 @@
     "leverage": 20,
     "autolot": true,
     "max_error_count": 5,
-    "lot_size": 0.1
+    "lot_size": 1
   },
   "notification": {
-    "discord_webhook_url": "https://discord.com/api/webhooks/1389148191882215555/STY2EhlVP0wlVQECDybXDWBbS-m5pgc7LfAnUR8M-o7r6JHcafh0SvEr9UKJd0-cl4-y"
+    "discord_webhook_url": "https://discord.com/api/webhooks/1394822287093399582/atRtJIDiOGtCzLt3nBzzLID-B6i58EwAXCqSBwbkcB3RbHvFnH_LkNYl5_TPMgQD3U4B"
   },
   "spreadsheets": {
     "config_url": "",

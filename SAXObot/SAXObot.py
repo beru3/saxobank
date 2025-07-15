@@ -39,6 +39,7 @@ try:
     import saxo_openapi.endpoints.portfolio.positions as positions
 except ImportError:
     pass
+import saxo_openapi.endpoints.portfolio.orders as pf_orders  # 追加
 
 # 設定ファイルパス
 SETTINGS_FILE = "saxo_settings.json"
@@ -868,9 +869,9 @@ class SaxoBot:
                         currency = balances_response.get('Currency', 'JPY')
                         total_value = balances_response.get('TotalValue', margin_available)
                         
-                        print(f"シミュレーション環境の残高（API）:")
-                        print(f"  MarginAvailableForTrading: {margin_available:,.2f} {currency}")
-                        print(f"  CashBalance: {cash_balance:,.2f}")
+                        print(f"  シミュレーション環境の残高（API）:")
+                        print(f"    MarginAvailableForTrading: {margin_available:,.2f} JPY")
+                        print(f"    CashBalance: {cash_balance:,.2f}")
                         
                         return {
                             'CashBalance': float(margin_available),  # MarginAvailableForTradingを使用
@@ -1326,11 +1327,11 @@ class SaxoBot:
                 params = {
                     'AccountKey': self.account_key,  # AccountKeyを追加
                     'ClientKey': self.client_key,
-                    'Status': 'Working'  # 未約定注文のみ
+                    # 'Status': 'Working'  # 不要、GetOpenOrdersMeは未約定のみ返す
                 }
                 
-                # 注文一覧を取得するエンドポイント
-                r = tr.orders.Orders(params=params)
+                # 注文一覧を取得するエンドポイント（修正）
+                r = pf_orders.GetOpenOrdersMe(params=params)
                 response = self.client.request(r)
                 
                 # レスポンスが直接返されない場合の処理
@@ -2004,7 +2005,7 @@ def load_settings():
         print(f"設定ファイル読み込みエラー: {e}")
         sys.exit(1)
 
-async def process_entrypoint(entrypoint, config, bot, trade_results):
+async def process_entrypoint(entrypoint, config, bot, trade_results, entry_label=None):
     """各エントリーポイントを処理する（GMOcoinbot2.py互換）"""
     # 逆指値注文のOrderIDを記録する変数を追加
     sl_order_id = None
@@ -2021,35 +2022,50 @@ async def process_entrypoint(entrypoint, config, bot, trade_results):
         time_diff = (entry_time - now).total_seconds()
         
         if time_diff > 0:
-            # エントリー時間が未来の場合、その時間まで待機（10秒前から準備）
-            print(f"エントリー時間 {entry_time.strftime('%H:%M:%S')} まで待機します（あと {time_diff:.0f} 秒）")
+            msg = f"エントリー時間 {entry_time.strftime('%H:%M:%S')} まで待機します（あと {time_diff:.0f} 秒）"
+            if entry_label:
+                msg = f"{entry_label} {msg}"
+            print("  " + msg)
             try:
                 await SAXOlib.wait_until(entry_time, 10, raise_exception=False)
             except ValueError as e:
-                print(f"⚠️ 待機中にエラーが発生しました: {str(e)}")
-                logging.warning(f"待機エラー: {str(e)}")
+                msg = f"⚠️ 待機中にエラーが発生しました: {str(e)}"
+                if entry_label:
+                    msg = f"{entry_label} {msg}"
+                print("  " + msg)
+                logging.warning(msg)
         else:
-            # エントリー時間が過去の場合でも処理を続行
-            print(f"⚠️ エントリー時間 {entry_time.strftime('%H:%M:%S')} は既に {abs(time_diff):.0f} 秒前に過ぎていますが、処理を続行します")
-            logging.warning(f"エントリー時間超過: {entry_time.strftime('%H:%M:%S')} ({abs(time_diff):.0f} 秒前) - 処理を続行します")
+            # エントリー時間が過去の場合はスキップ
+            msg = f"★ {entry_label} エントリー時間 {entry_time.strftime('%H:%M:%S')} は既に {abs(time_diff):.0f} 秒前に過ぎています。スキップします"
+            print("  " + msg)
+            return
         
         print(f"** エントリー開始: {entrypoint['entry_time'].strftime('%H:%M:%S')}-{entrypoint['exit_time'].strftime('%H:%M:%S')}({entrypoint['ticker']} {entrypoint['direction']} size{entrypoint['amount']} 指値{entrypoint['LimitRate']} 逆指値{entrypoint['StopRate']} {entrypoint['memo']})")
         logging.info(f"** EntryPoint: {entrypoint['entry_time'].strftime('%H:%M:%S')}-{entrypoint['exit_time'].strftime('%H:%M:%S')}({entrypoint['ticker']} {entrypoint['direction']} size{entrypoint['amount']} 指値{entrypoint['LimitRate']} 逆指値{entrypoint['StopRate']} {entrypoint['memo']})")
         
         # エントリー前の既存ポジションチェック
         try:
+            logging.info(f"[ENTRY] {entry_label} {entrypoint['ticker']} {entrypoint['direction']} エントリー前ポジションチェック開始: {datetime.now().isoformat()}")
             positions = await bot.get_positions(entrypoint['ticker'])
+            logging.info(f"[ENTRY] get_positionsレスポンス: {positions}")
             if positions and positions.get('Data'):
                 position_count = len(positions['Data'])
+                logging.info(f"[ENTRY] {entrypoint['ticker']} ポジション数: {position_count}")
                 if position_count > 0:
-                    logging.warning(f"{entrypoint['ticker']}のポジションが既に{position_count}個存在します")
+                    logging.warning(f"[ENTRY] {entrypoint['ticker']}のポジションが既に{position_count}個存在します")
                     print(f"警告: {entrypoint['ticker']}のポジションが既に{position_count}個存在します")
-                    
-                    # 部分約定の可能性をチェック
                     total_amount = sum(abs(p['PositionBase']['Amount']) for p in positions['Data'])
                     print(f"  合計数量: {total_amount}")
+                    for p in positions['Data']:
+                        pos_base = p.get('PositionBase', {})
+                        logging.info(f"[ENTRY] 既存ポジション詳細: {pos_base}")
+                        if pos_base.get('BuySell', '').upper() == entrypoint['direction'].upper():
+                            print(f"  ★ {entry_label} {entrypoint['ticker']} {entrypoint['direction']} の未決済ポジションが既に存在します。新規エントリーをスキップします")
+                            logging.info(f"[ENTRY] {entry_label} {entrypoint['ticker']} {entrypoint['direction']} の未決済ポジションが既に存在。スキップ")
+                            return
         except Exception as e:
-            logging.error(f"ポジションチェックエラー: {e}")
+            logging.error(f"[ENTRY] ポジションチェックエラー: {e}")
+            logging.error(traceback.format_exc())
         
         # Discord Webhook URLを取得
         discord_key = config.get("notification", {}).get("discord_webhook_url", "")
@@ -2119,14 +2135,14 @@ async def process_entrypoint(entrypoint, config, bot, trade_results):
         # 残高取得エラーまたは0の場合の警告
         if balance_info.get('Error') or balance_info.get('Warning'):
             print(f"⚠️ 残高取得に問題があります: {balance_info.get('Error', balance_info.get('Warning'))}")
-            if config['autolot'].upper() == 'TRUE':
+            if config.get('autolot', 'FALSE').upper() == 'TRUE':
                 print("⚠️ オートロット機能が正しく動作しない可能性があります")
                 if entrypoint['line_notify'].upper() == 'TRUE' and discord_key:
                     await SAXOlib.send_discord_message(
                         discord_key, 
                         f"⚠️ 残高取得エラー。オートロット計算が正確でない可能性があります。")
         
-        if balance == 0 and config['autolot'].upper() == 'TRUE':
+        if balance == 0 and config.get('autolot', 'FALSE').upper() == 'TRUE':
             print("⚠️ 残高が0円です。オートロット計算ができません。")
             if entrypoint['line_notify'].upper() == 'TRUE' and discord_key:
                 await SAXOlib.send_discord_message(
@@ -2139,77 +2155,46 @@ async def process_entrypoint(entrypoint, config, bot, trade_results):
             print(f"取引可能残高: {balance:,.2f} (MarginAvailable: {margin_available:,.2f})")
         
         # 自動ロット計算
-        volume = entrypoint['amount']
-        if config['autolot'].upper() == 'TRUE' and balance > 0:
+        autolot_enabled = config.get('trading', {}).get('autolot', False)
+        logger = logging.getLogger()
+        if autolot_enabled is True and balance > 0:
+            logger.debug(f"autolot分岐に入った: balance={balance}, leverage={config.get('trading', {}).get('leverage')}, ticker={entrypoint['ticker']}, direction={entrypoint['direction']}")
+            logger.debug(f"ask={ask}, bid={bid}")
+            if ask is None or bid is None or ask == 0 or bid == 0:
+                logger.error(f"ask/bidの値が不正: ask={ask}, bid={bid}")
             # SAXO証券ではUICによって通貨ペアを判定
             if entrypoint['ticker'][-3:] == "USD":
-                # USD建ての通貨ペア
+                logger.debug("USD建てロジックに入った")
                 usdjpy_price = await bot.get_price("USDJPY")
                 if usdjpy_price:
                     usdjpy_quote = usdjpy_price.get('Quote', {})
-                    if entrypoint['direction'].upper() == "BUY":
-                        # 通貨単位で計算
-                        raw_volume = int((balance * float(config['leverage'])) / (ask * usdjpy_quote.get('Ask', 100)))
-                        # ロット単位に変換（1ロット = 100,000通貨単位）
-                        lot_size = raw_volume / 100000
-                        # 小数点第2位までで四捨五入
-                        lot_size = round(lot_size, 2)
-                        # 最小ロットサイズを0.01ロット（1,000通貨単位）とする
-                        if lot_size < 0.01:
-                            lot_size = 0.01
-                        # 通貨単位に戻す
-                        volume = int(lot_size * 100000)
-                        print(f"USD建て自動ロット: {lot_size}ロット ({volume}通貨単位)")
-                    else:
-                        # 通貨単位で計算
-                        raw_volume = int((balance * float(config['leverage'])) / (bid * usdjpy_quote.get('Bid', 100)))
-                        # ロット単位に変換
-                        lot_size = raw_volume / 100000
-                        # 小数点第2位までで四捨五入
-                        lot_size = round(lot_size, 2)
-                        # 最小ロットサイズを0.01ロット（1,000通貨単位）とする
-                        if lot_size < 0.01:
-                            lot_size = 0.01
-                        # 通貨単位に戻す
-                        volume = int(lot_size * 100000)
-                        print(f"USD建て自動ロット: {lot_size}ロット ({volume}通貨単位)")
-            else:
-                # JPY建ての通貨ペア
-                if entrypoint['direction'].upper() == "BUY":
-                    # 通貨単位で計算
-                    raw_volume = int((balance * float(config['leverage'])) / ask)
-                    # ロット単位に変換
-                    lot_size = raw_volume / 100000
-                    # 小数点第2位までで四捨五入
-                    lot_size = round(lot_size, 2)
-                    # 最小ロットサイズを0.01ロット（1,000通貨単位）とする
-                    if lot_size < 0.01:
-                        lot_size = 0.01
-                    # 通貨単位に戻す
-                    volume = int(lot_size * 100000)
-                    print(f"JPY建て自動ロット: {lot_size}ロット ({volume}通貨単位)")
+                    usdjpy_ask = usdjpy_quote.get('Ask', 100)
+                    usdjpy_bid = usdjpy_quote.get('Bid', 100)
+                    logger.debug(f"USDJPY ask={usdjpy_ask}, bid={usdjpy_bid}")
                 else:
-                    # 通貨単位で計算
-                    raw_volume = int((balance * float(config['leverage'])) / bid)
-                    # ロット単位に変換
+                    logger.error("USDJPYの価格取得に失敗")
+            else:
+                logger.debug("JPY建てロジックに入った")
+                try:
+                    raw_volume = int((balance * float(config.get('trading', {}).get('leverage', 20))) / ask)
                     lot_size = raw_volume / 100000
-                    # 小数点第2位までで四捨五入
-                    lot_size = round(lot_size, 2)
-                    # 最小ロットサイズを0.01ロット（1,000通貨単位）とする
-                    if lot_size < 0.01:
-                        lot_size = 0.01
-                    # 通貨単位に戻す
-                    volume = int(lot_size * 100000)
-                    print(f"JPY建て自動ロット: {lot_size}ロット ({volume}通貨単位)")
-            
-            # ロット数が0または異常に小さい場合の警告
-            if volume < 1000:
-                print(f"⚠️ 計算されたロット数が小さすぎます: {volume}")
-                print(f"  → 最小ロット 1000 (0.01ロット) を使用します")
-                volume = 1000
+                    logger.debug(f"raw_volume={raw_volume}, lot_size={lot_size}")
+                    main_volume = int(lot_size * 100000)
+                    logger.debug(f"main_volume={main_volume}")
+                except Exception as e:
+                    logger.error(f"JPY建て自動ロット計算で例外: {e}")
+        else:
+            logger.debug("autolot分岐に入らなかった。固定ロットを使用")
+            main_volume = entrypoint['amount']
+        if main_volume == 0.1:
+            logger.error("main_volumeが0.1のままです。autolot計算が正しく動作していません！")
         
-        # 実際に使用するvolume値を記録
-        main_volume = volume if config['autolot'].upper() == 'TRUE' else entrypoint['amount']
+        # どんな場合でも注文数量が最小値未満なら補正
+        MIN_VOLUME = 1000
+        if main_volume < MIN_VOLUME:
+            print(f"⚠️ 注文数量が最小値未満のため、{MIN_VOLUME}通貨（0.01ロット）に補正します")
+            logging.warning(f"注文数量が最小値未満: {main_volume} → {MIN_VOLUME}に補正")
+            main_volume = MIN_VOLUME
         
         # スプレッド計算
         if bid and ask:
@@ -2240,11 +2225,13 @@ async def process_entrypoint(entrypoint, config, bot, trade_results):
         
         # 成行注文
         print(f"\n注文送信中... 数量: {main_volume}")
+        logging.info(f"[ORDER] {entry_label} {entrypoint['ticker']} {entrypoint['direction']} 注文送信: 数量={main_volume} 時刻={datetime.now().isoformat()}")
         order_result = await bot.place_market_order(
             entrypoint['ticker'],
             entrypoint['direction'],
             main_volume
         )
+        logging.info(f"[ORDER] place_market_orderレスポンス: {order_result}")
         
         # 注文結果の詳細ログ
         logging.info(f"注文結果: {order_result}")
@@ -2297,68 +2284,28 @@ async def process_entrypoint(entrypoint, config, bot, trade_results):
         
         # OrderIDを取得して表示
         main_order_id = order_result.get('OrderId')
-        print(f"注文OK - OrderID: {main_order_id}")
+        print(f"  ★★★ {entry_label} 注文発注成功！OrderID: {main_order_id}")
         
         # ポジション確認の待機時間を延長
         print("約定待機中...")
+        logging.info(f"[ORDER] 約定待機開始: {datetime.now().isoformat()}")
         await asyncio.sleep(5)  # 2秒から5秒に延長
         
         # ポジション確認を複数回試行
         positions = None
-        for retry in range(3):  # 最大3回試行
+        for retry in range(5):  # 最大5回試行
             positions = await bot.get_positions(entrypoint['ticker'])
-            
-            if positions:
-                logging.info(f"ポジション取得結果 (試行{retry+1}): {positions}")
-                
+            logging.info(f"[ORDER] ポジション取得(試行{retry+1}): {positions}")
             if positions and positions.get('Data') and len(positions['Data']) > 0:
                 break
-                
-            if retry < 2:  # 最後の試行でなければ待機
-                print(f"ポジション確認中... (試行{retry+1}/3)")
-                await asyncio.sleep(3)
-        
+            if retry < 4:  # 最後の試行でなければ待機
+                print(f"  ポジション確認中... (試行{retry+1}/5)")
+                await asyncio.sleep(10)
         if not positions or not positions.get('Data'):
-            # ポジションが見つからない場合、全ポジションを確認
-            print("特定通貨ペアのポジションが見つかりません。全ポジションを確認中...")
-            all_positions = await bot.get_positions()  # tickerを指定しない
-            
-            if all_positions and all_positions.get('Data'):
-                logging.info(f"全ポジション: {json.dumps(all_positions, indent=2)}")
-                print(f"全ポジション数: {len(all_positions['Data'])}")
-                
-                # 各ポジションの詳細を表示
-                for pos in all_positions['Data']:
-                    pos_base = pos.get('PositionBase', {})
-                    net_position_id = pos.get('NetPositionId', '')
-                    uic = pos_base.get('Uic', 'Unknown')
-                    asset_type = pos_base.get('AssetType', 'Unknown')
-                    amount = pos_base.get('Amount', 0)
-                    source_order_id = pos_base.get('SourceOrderId', '')
-                    
-                    print(f"  - NetPositionId: {net_position_id}, Uic: {uic}, AssetType: {asset_type}, Amount: {amount}")
-                    print(f"    SourceOrderId: {source_order_id}")
-                    
-                    # 注文IDが一致するかチェック
-                    if source_order_id == main_order_id:
-                        print(f"    → ★ これは今回の注文（OrderID: {main_order_id}）のポジションです！")
-                        # ポジションが見つかったので、手動でデータを設定
-                        positions = {'Data': [pos]}
-                        break
-                    
-                    # NetPositionIdでティッカーを判定
-                    ticker_saxo = entrypoint['ticker'].replace("_", "")
-                    if ticker_saxo in net_position_id and asset_type == "FxSpot":
-                        print(f"    → 通貨ペア {entrypoint['ticker']} の可能性があります")
-            
-            # それでもポジションが見つからない場合
-            if not positions or not positions.get('Data'):
-                print("注文は送信されましたが、ポジションの確認ができませんでした。")
-                if entrypoint['line_notify'].upper() == 'TRUE' and discord_key:
-                    await SAXOlib.send_discord_message(
-                        discord_key, 
-                        f"注文は送信されましたが（OrderID: {main_order_id}）、ポジションの確認ができませんでした。手動で確認してください。")
-                return
+            print("  ★ API障害またはSaxoサーバー遅延の可能性。管理画面で必ずポジション・決済履歴を確認してください。")
+            logging.error("[ORDER] API障害またはSaxoサーバー遅延の可能性。管理画面で必ずポジション・決済履歴を確認してください。")
+        else:
+            logging.info(f"[ORDER] 約定後ポジション: {positions}")
         
         # ここからは通常のポジション処理
         position = positions['Data'][0]
@@ -2440,7 +2387,7 @@ async def process_entrypoint(entrypoint, config, bot, trade_results):
         
         # 通知（発注時間を含めるように修正）
         if entrypoint['line_notify'].upper() == 'TRUE' and discord_key:
-            if config['autolot'].upper() == 'TRUE':
+            if config.get('autolot', 'FALSE').upper() == 'TRUE':
                 message = f"建玉 {entrypoint['ticker']} {entrypoint['direction']} {entrypoint['entry_time'].strftime('%H:%M:%S')}-{entrypoint['exit_time'].strftime('%H:%M:%S')}\n"
                 message += f"OrderID: {main_order_id}\n"
                 if open_time_str:
@@ -2466,6 +2413,7 @@ async def process_entrypoint(entrypoint, config, bot, trade_results):
         positions = await bot.get_positions(entrypoint['ticker'])
         if not positions or not positions.get('Data'):
             print("ポジション無し。TPorSLで決済されています。")
+            print(f"⚠️ {entry_label} ポジション取得エラーまたはAPIエラーですが、エントリー自体は正常に発注されています。詳細はログファイルを確認してください。")
             print(f"決済前の情報: OrderID={main_order_id}, PositionID={main_position_id}, SourceOrderID={main_source_order_id if 'main_source_order_id' in locals() else 'N/A'}")
             print(f"SL注文: OrderID={sl_order_id if 'sl_order_id' in locals() else 'N/A'}, SL価格={sl_price if 'sl_price' in locals() else 'N/A'}")
             
@@ -2487,7 +2435,7 @@ async def process_entrypoint(entrypoint, config, bot, trade_results):
             while not closed_position and retry_count < 5:  # 最大5回に増加
                 retry_count += 1
                 print(f"決済履歴が見つかりません。再試行中... ({retry_count}/5)")
-                await asyncio.sleep(5)  # 5秒待機に延長
+                await asyncio.sleep(10)  # 10秒待機に延長
                 
                 # 時間範囲を広げて再検索
                 closed_position = await bot.get_recent_closed_position(
@@ -2778,46 +2726,40 @@ async def process_entrypoint(entrypoint, config, bot, trade_results):
         
         # 全決済注文
         print(f"\n決済開始（ポジション数: {len(positions['Data'])}）")
-        
-        # 成功/失敗カウンタを追加
+        logging.info(f"[CLOSE] 決済開始: ポジション数={len(positions['Data'])} 時刻={datetime.now().isoformat()}")
+
         success_count = 0
         failed_count = 0
         total_pips = 0
         total_profit_loss = 0
-        
-        # 決済したポジションの情報を記録
         closed_positions_info = []
         
         for i, pos in enumerate(positions['Data']):
             try:
                 pos_base = pos['PositionBase']
-                pos_id = pos['PositionId']  # PositionIdは直下にある
+                pos_id = pos['PositionId']
                 pos_amount = abs(pos_base['Amount'])
                 open_price = pos_base.get('OpenPrice', 0)
-                
-                print(f"  ポジション{i+1}: ID={pos_id}, Amount={pos_amount}, OpenPrice={open_price}")
-                
-                # ポジションの存在確認（既に決済されていないか）
+                logging.info(f"[CLOSE] ポジション{i+1}: ID={pos_id}, Amount={pos_amount}, OpenPrice={open_price}, Base={pos_base}")
                 current_positions = await bot.get_positions(entrypoint['ticker'])
+                logging.info(f"[CLOSE] 再取得ポジション: {current_positions}")
                 position_still_exists = False
-                
                 if current_positions and current_positions.get('Data'):
                     for current_pos in current_positions['Data']:
                         if current_pos.get('PositionId') == pos_id:
                             position_still_exists = True
                             break
-                
                 if not position_still_exists:
                     print(f"  → ポジション{pos_id}は既に決済されています（スキップ）")
+                    logging.info(f"[CLOSE] ポジション{pos_id}は既に決済済み。スキップ")
                     continue
-                
                 close_result = await bot.close_position(pos_id, pos_amount)
-                
+                logging.info(f"[CLOSE] close_positionレスポンス: {close_result}")
                 if close_result and close_result.get('OrderId'):
                     print(f"  → 決済注文発注成功: OrderId={close_result['OrderId']}")
+                    logging.info(f"[CLOSE] 決済注文発注成功: OrderId={close_result['OrderId']}")
                     success_count += 1
-                    
-                    # 決済情報を記録（後で履歴を取得するため）
+                    # 必ず記録
                     closed_positions_info.append({
                         'position_id': pos_id,
                         'close_order_id': close_result['OrderId'],
@@ -2827,158 +2769,82 @@ async def process_entrypoint(entrypoint, config, bot, trade_results):
                     })
                 else:
                     print(f"  → 決済注文失敗")
+                    logging.error(f"[CLOSE] 決済注文失敗: {close_result}")
                     failed_count += 1
-                    if entrypoint['line_notify'].upper() == 'TRUE' and discord_key:
-                        await SAXOlib.send_discord_message(
-                            discord_key,
-                            f"決済注文失敗: ポジションID {pos_id}")
-                        
             except Exception as e:
                 print(f"  → 決済処理エラー: {e}")
-                failed_count += 1
-                logging.error(f"決済処理エラー (PositionID={pos_id}): {e}")
+                logging.error(f"[CLOSE] 決済処理エラー (PositionID={pos_id}): {e}")
+                logging.error(traceback.format_exc())
         
         # 決済結果サマリー
         print(f"\n決済処理完了: 成功={success_count}, 失敗={failed_count}")
         
         # 決済が成功した場合は、実際の約定情報を取得
         if success_count > 0:
-            print("\n決済約定情報を取得中...")
-            
-            # 決済がAPIに反映されるまで待機
+            print("\n決済約定情報（エントリー時間超過分を含む）を取得中...")
             await asyncio.sleep(5)
-            
-            # 各決済の実際の約定情報を取得
             for closed_info in closed_positions_info:
+                logging.info(f"[CLOSE] 決済履歴取得開始: ticker={entrypoint['ticker']}, order_id={closed_info['close_order_id']}, position_id={closed_info['position_id']}")
                 try:
-                    # 決済履歴を取得
                     closed_position = await bot.get_recent_closed_position(
                         entrypoint['ticker'],
                         order_id=closed_info['close_order_id'],
                         position_id=closed_info['position_id']
                     )
-                    
-                    # 取得できない場合は再試行
-                    retry_count = 0
-                    while not closed_position and retry_count < 3:
-                        retry_count += 1
-                        print(f"  決済履歴が見つかりません。再試行中... ({retry_count}/3)")
-                        await asyncio.sleep(3)
-                        
-                        closed_position = await bot.get_recent_closed_position(
-                            entrypoint['ticker'],
-                            order_id=closed_info['close_order_id'],
-                            position_id=closed_info['position_id']
-                        )
-                    
-                    if closed_position:
-                        # 決済情報から実際の約定価格を取得
-                        closed_pos_details = closed_position.get('ClosedPosition', {})
-                        close_price = closed_pos_details.get('ExecutionPrice') or closed_pos_details.get('ClosingPrice', 0)
-                        close_time = closed_pos_details.get('ExecutionTimeClose') or closed_pos_details.get('CloseTime')
-                        
-                        # 実現損益
-                        profit_loss = closed_position.get('ProfitLoss', 0)
-                        profit_loss_in_base_currency = closed_position.get('ProfitLossInBaseCurrency', profit_loss)
-                        
-                        # pips計算
-                        if entrypoint['ticker'][-3:] != "JPY":
-                            multiply = 10000
-                        else:
-                            multiply = 100
-                        
-                        if closed_info['direction'] == "BUY":
-                            pips = (close_price - closed_info['open_price']) * multiply
-                        else:
-                            pips = (closed_info['open_price'] - close_price) * multiply
-                        
-                        # 決済時刻の処理
-                        if close_time:
-                            try:
-                                close_datetime = datetime.fromisoformat(close_time.replace('Z', '+00:00'))
-                                # 日本時間に変換（UTC+9）
-                                from datetime import timezone
-                                jst = timezone(timedelta(hours=9))
-                                close_datetime_jst = close_datetime.replace(tzinfo=timezone.utc).astimezone(jst)
-                                close_time_str = close_datetime_jst.strftime('%H:%M:%S')
-                            except:
-                                close_time_str = datetime.now().strftime('%H:%M:%S')
-                        else:
-                            close_time_str = datetime.now().strftime('%H:%M:%S')
-                        
-                        total_pips += pips
-                        total_profit_loss += profit_loss_in_base_currency
-                        
-                        print(f"  決済詳細: {pips:.3f}pips, 損益{profit_loss_in_base_currency:.0f}円")
-                        print(f"  決済価格: {close_price}, 決済時刻: {close_time_str}")
-                        print(f"  📊 エントリー結果: {entrypoint['ticker']} {closed_info['direction']} {pips:.3f}pips")
-                        
-                        if entrypoint['line_notify'].upper() == 'TRUE' and discord_key:
-                            await SAXOlib.send_discord_message(
-                                discord_key,
-                                f"決済 {entrypoint['ticker']} {closed_info['direction']} {entrypoint['entry_time'].strftime('%H:%M')}-{entrypoint['exit_time'].strftime('%H:%M')}\n"
-                                f"{pips:.3f}pips 損益{profit_loss_in_base_currency:.0f}円\n"
-                                f"決済時刻: {close_time_str}\n"
-                                f"entPrice{closed_info['open_price']} closePrice{close_price}\n"
-                                f"memo {entrypoint['memo']}")
-                    else:
-                        # 決済履歴が取得できない場合は概算値を使用（フォールバック）
-                        print(f"  決済履歴が取得できませんでした。概算値を使用します。")
-                        
-                        # 現在価格で決済価格を推定
-                        current_price = await bot.get_price(entrypoint['ticker'])
-                        if current_price:
-                            current_quote = current_price.get('Quote', {})
-                            if closed_info['direction'] == "BUY":
-                                close_price = current_quote.get('Bid', closed_info['open_price'])
-                                pips = (close_price - closed_info['open_price']) * multiply
-                            else:
-                                close_price = current_quote.get('Ask', closed_info['open_price'])
-                                pips = (closed_info['open_price'] - close_price) * multiply
-                            
-                            # 損益計算（概算）
-                            if entrypoint['ticker'][-3:] == "JPY":
-                                loss_gain = pips * closed_info['amount'] / multiply
-                            else:
-                                # USD建ての場合はUSDJPYレートで換算
-                                usdjpy_price = await bot.get_price("USD_JPY")
-                                if usdjpy_price:
-                                    usdjpy_mid = (usdjpy_price['Quote']['Bid'] + usdjpy_price['Quote']['Ask']) / 2
-                                    loss_gain = pips * closed_info['amount'] / multiply * usdjpy_mid
-                                else:
-                                    loss_gain = 0
-                            
-                            total_pips += pips
-                            total_profit_loss += loss_gain
-                            
-                            print(f"  → 決済完了: {pips:.3f}pips, 損益{loss_gain:.0f}円（概算）")
-                            print(f"  📊 エントリー結果: {entrypoint['ticker']} {closed_info['direction']} {pips:.3f}pips（概算）")
-                            
-                            if entrypoint['line_notify'].upper() == 'TRUE' and discord_key:
-                                await SAXOlib.send_discord_message(
-                                    discord_key,
-                                    f"決済 {entrypoint['ticker']} {closed_info['direction']} {entrypoint['entry_time'].strftime('%H:%M')}-{entrypoint['exit_time'].strftime('%H:%M')}\n"
-                                    f"{pips:.3f}pips 損益{loss_gain:.0f}円（概算）\n"
-                                    f"entPrice{closed_info['open_price']} closePrice{close_price}\n"
-                                    f"memo {entrypoint['memo']}")
-                
+                    logging.info(f"[CLOSE] 決済履歴取得結果: {closed_position}")
                 except Exception as e:
-                    print(f"  決済情報取得エラー: {e}")
-                    logging.error(f"決済情報取得エラー: {e}")
-            
-            # 取引結果を記録
-            trade_results.append({
-                'ticker': entrypoint['ticker'],
-                'direction': entrypoint['direction'],
-                'memo': entrypoint['memo'],
-                'pips': total_pips / success_count if success_count > 0 else 0,  # 平均pips
-                'profit_loss': total_profit_loss,
-                'close_type': 'EXIT',
-                'close_time': datetime.now().strftime('%H:%M:%S'),
-                'entry_time': entrypoint['entry_time'].strftime('%H:%M'),
-                'exit_time': entrypoint['exit_time'].strftime('%H:%M')
-            })
-        
+                    logging.error(f"[CLOSE] 決済履歴取得例外: {e}")
+                    logging.error(traceback.format_exc())
+                    closed_position = None
+                if not closed_position:
+                    pips = 0
+                    profit_loss_in_base_currency = 0
+                    close_time_str = "取得不可"
+                    close_price = 0
+                    close_type = "EXIT(履歴取得不可)"
+                    memo = entrypoint['memo'] + " | 決済履歴取得不可"
+                else:
+                    closed_pos_details = closed_position.get('ClosedPosition', {})
+                    close_price = closed_pos_details.get('ExecutionPrice') or closed_pos_details.get('ClosingPrice', 0)
+                    close_time = closed_pos_details.get('ExecutionTimeClose') or closed_pos_details.get('CloseTime')
+                    profit_loss = closed_position.get('ProfitLoss', 0)
+                    profit_loss_in_base_currency = closed_position.get('ProfitLossInBaseCurrency', profit_loss)
+                    if entrypoint['ticker'][-3:] != "JPY":
+                        multiply = 10000
+                    else:
+                        multiply = 100
+                    if closed_info['direction'] == "BUY":
+                        pips = (close_price - closed_info['open_price']) * multiply
+                    else:
+                        pips = (closed_info['open_price'] - close_price) * multiply
+                    if close_time:
+                        try:
+                            close_datetime = datetime.fromisoformat(close_time.replace('Z', '+00:00'))
+                            from datetime import timezone
+                            jst = timezone(timedelta(hours=9))
+                            close_datetime_jst = close_datetime.replace(tzinfo=timezone.utc).astimezone(jst)
+                            close_time_str = close_datetime_jst.strftime('%H:%M:%S')
+                        except Exception:
+                            close_time_str = datetime.now().strftime('%H:%M:%S')
+                    else:
+                        close_time_str = datetime.now().strftime('%H:%M:%S')
+                    close_type = "EXIT"
+                    memo = entrypoint['memo']
+                trade_result = {
+                    'ticker': entrypoint['ticker'],
+                    'direction': closed_info['direction'],
+                    'memo': memo,
+                    'pips': pips,
+                    'profit_loss': profit_loss_in_base_currency,
+                    'close_type': close_type,
+                    'close_time': close_time_str,
+                    'open_price': closed_info['open_price'],
+                    'close_price': close_price,
+                    'entry_time': entrypoint['entry_time'].strftime('%H:%M'),
+                    'exit_time': entrypoint['exit_time'].strftime('%H:%M')
+                }
+                trade_results.append(trade_result)
+                logging.info(f"[CLOSE] trade_results記録: {trade_result}")
         print("決済処理完了")
         logging.info('  +エントリー完了')
         
@@ -2990,7 +2856,8 @@ async def process_entrypoint(entrypoint, config, bot, trade_results):
         logging.error("トレースバック:")
         logging.error(traceback.format_exc())
         
-        if entrypoint['line_notify'].upper() == 'TRUE' and discord_key:
+        if entrypoint.get('line_notify', '').upper() == 'TRUE' and config.get("notification", {}).get("discord_webhook_url", ""):
+            discord_key = config.get("notification", {}).get("discord_webhook_url", "")
             await SAXOlib.send_discord_message(
                 discord_key,
                 f"例外の型：{type(e)}")
@@ -3076,6 +2943,15 @@ async def run():
     
     # 設定ファイルから情報を読み込む
     settings = load_settings()
+    
+    # ロガーの初期化（必ずrun関数の先頭で）
+    import logging
+    logger = logging.getLogger()
+    debug_mode = settings.get('trading', {}).get('debug', False)
+    if debug_mode:
+        logger.setLevel(logging.DEBUG)
+    else:
+        logger.setLevel(logging.WARNING)
     
     # 環境設定
     is_live_mode = settings.get("trading", {}).get("is_live_mode", False)
@@ -3236,13 +3112,20 @@ async def run():
                 print("注意: 過去の時間のエントリーポイントも処理します")
                 
                 # 各エントリーポイントを処理
-                for entrypoint in entrypoints:
+                for idx, entrypoint in enumerate(entrypoints):
+                    entry_label = f"[{idx+1}/{len(entrypoints)}] {entrypoint['ticker']} {entrypoint['entry_time'].strftime('%H:%M')}-{entrypoint['exit_time'].strftime('%H:%M')} {entrypoint['direction']}"
+                    print("\n" + "="*60)
+                    print(f"==== {entry_label} エントリー開始 ====")
+                    logger.info(f"==== {entry_label} エントリー開始 ====")
                     # ロットサイズの設定（エントリーポイントに指定がなければ設定ファイルの値を使用）
                     if entrypoint.get("amount", 0) <= 0:
                         entrypoint["amount"] = lot_size
                     
                     # エントリーポイントを処理
-                    await process_entrypoint(entrypoint, settings, bot, trade_results)
+                    await process_entrypoint(entrypoint, settings, bot, trade_results, entry_label)
+                    print(f"==== {entry_label} エントリー終了 ====")
+                    print("="*60)
+                    logger.info(f"==== {entry_label} エントリー終了 ====")
                 
                 # すべての取引が完了した後に日次サマリーを送信
                 if trade_results:
@@ -3258,8 +3141,15 @@ async def run():
                     print(f"{'='*60}")
                     print(f"取引数: {len(trade_results)} (勝: {win_count}, 負: {lose_count})")
                     print(f"勝率: {(win_count / len(trade_results) * 100):.1f}%" if trade_results else "勝率: 0.0%")
-                    print(f"合計pips: {total_pips:.3f}")
-                    print(f"合計損益: {total_profit:.0f}円")
+                    print(f"{'='*60}")
+                    
+                    # 各エントリーポイントごとに1行で出力（pipsは小数点1桁まで）
+                    for i, trade in enumerate(trade_results):
+                        print(f"{i+1:2d}. {trade['ticker']} {trade['entry_time']}-{trade['close_time']} {trade['direction']} {trade['pips']:+.1f}pips")
+                    
+                    # 合計pipsも小数点1桁まで
+                    print(f"{'='*60}")
+                    print(f"合計pips: {total_pips:+.1f}")
                     print(f"{'='*60}")
                     
                     # 各取引の詳細を表示
@@ -3327,15 +3217,14 @@ async def main():
     await run()
 
 if __name__ == "__main__":
-    # ログ設定
+    # 本番運用向けログ設定
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        level=logging.DEBUG,  # ファイルには全ログ
+        format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.FileHandler("saxobot.log"),
-            logging.StreamHandler()
+            logging.FileHandler("saxobot.log", encoding="utf-8"),  # ファイルには全ログ
+            logging.StreamHandler()  # コンソールはWARNING以上
         ]
     )
-    
     # 非同期実行
     asyncio.run(main())

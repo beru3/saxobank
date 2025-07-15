@@ -3,7 +3,7 @@ Write-Host "============================" -ForegroundColor Green
 Write-Host "仮想環境をアクティベートしています..." -ForegroundColor Yellow
 
 # 仮想環境をアクティベート
-& ".\saxobot_venv\Scripts\Activate.ps1"
+& ".\saxobot_venv_new\Scripts\Activate.ps1"
 
 Write-Host "仮想環境がアクティベートされました" -ForegroundColor Green
 Write-Host "Pythonバージョン:" -ForegroundColor Cyan
