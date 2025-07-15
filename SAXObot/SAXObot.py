@@ -2157,37 +2157,72 @@ async def process_entrypoint(entrypoint, config, bot, trade_results, entry_label
         # 自動ロット計算
         autolot_enabled = config.get('trading', {}).get('autolot', False)
         logger = logging.getLogger()
+        main_volume = entrypoint['amount']  # デフォルト値を設定
+        
         if autolot_enabled is True and balance > 0:
             logger.debug(f"autolot分岐に入った: balance={balance}, leverage={config.get('trading', {}).get('leverage')}, ticker={entrypoint['ticker']}, direction={entrypoint['direction']}")
             logger.debug(f"ask={ask}, bid={bid}")
+            
             if ask is None or bid is None or ask == 0 or bid == 0:
                 logger.error(f"ask/bidの値が不正: ask={ask}, bid={bid}")
-            # SAXO証券ではUICによって通貨ペアを判定
-            if entrypoint['ticker'][-3:] == "USD":
-                logger.debug("USD建てロジックに入った")
-                usdjpy_price = await bot.get_price("USDJPY")
-                if usdjpy_price:
-                    usdjpy_quote = usdjpy_price.get('Quote', {})
-                    usdjpy_ask = usdjpy_quote.get('Ask', 100)
-                    usdjpy_bid = usdjpy_quote.get('Bid', 100)
-                    logger.debug(f"USDJPY ask={usdjpy_ask}, bid={usdjpy_bid}")
-                else:
-                    logger.error("USDJPYの価格取得に失敗")
+                print(f"⚠️ 価格情報が不正です。固定ロット {entrypoint['amount']} を使用します")
+                main_volume = entrypoint['amount']
             else:
-                logger.debug("JPY建てロジックに入った")
-                try:
-                    raw_volume = int((balance * float(config.get('trading', {}).get('leverage', 20))) / ask)
-                    lot_size = raw_volume / 100000
-                    logger.debug(f"raw_volume={raw_volume}, lot_size={lot_size}")
-                    main_volume = int(lot_size * 100000)
-                    logger.debug(f"main_volume={main_volume}")
-                except Exception as e:
-                    logger.error(f"JPY建て自動ロット計算で例外: {e}")
+                # SAXO証券ではUICによって通貨ペアを判定
+                if entrypoint['ticker'][-3:] == "USD":
+                    logger.debug("USD建てロジックに入った")
+                    usdjpy_price = await bot.get_price("USDJPY")
+                    if usdjpy_price:
+                        usdjpy_quote = usdjpy_price.get('Quote', {})
+                        usdjpy_ask = usdjpy_quote.get('Ask', 100)
+                        usdjpy_bid = usdjpy_quote.get('Bid', 100)
+                        logger.debug(f"USDJPY ask={usdjpy_ask}, bid={usdjpy_bid}")
+                        
+                        # USD建ての自動ロット計算
+                        try:
+                            leverage = float(config.get('trading', {}).get('leverage', 20))
+                            # USD建ての場合、USDJPYレートで換算
+                            raw_volume = int((balance * leverage) / (ask * usdjpy_ask))
+                            lot_size = raw_volume / 100000
+                            logger.debug(f"USD建て - raw_volume={raw_volume}, lot_size={lot_size}")
+                            main_volume = int(lot_size * 100000)
+                            logger.debug(f"USD建て - main_volume={main_volume}")
+                        except Exception as e:
+                            logger.error(f"USD建て自動ロット計算で例外: {e}")
+                            print(f"⚠️ USD建て自動ロット計算エラー。固定ロット {entrypoint['amount']} を使用します")
+                            main_volume = entrypoint['amount']
+                    else:
+                        logger.error("USDJPYの価格取得に失敗")
+                        print(f"⚠️ USDJPY価格取得失敗。固定ロット {entrypoint['amount']} を使用します")
+                        main_volume = entrypoint['amount']
+                else:
+                    logger.debug("JPY建てロジックに入った")
+                    try:
+                        leverage = float(config.get('trading', {}).get('leverage', 20))
+                        # JPY建ての自動ロット計算
+                        raw_volume = int((balance * leverage) / ask)
+                        lot_size = raw_volume / 100000
+                        logger.debug(f"JPY建て - raw_volume={raw_volume}, lot_size={lot_size}")
+                        main_volume = int(lot_size * 100000)
+                        logger.debug(f"JPY建て - main_volume={main_volume}")
+                    except Exception as e:
+                        logger.error(f"JPY建て自動ロット計算で例外: {e}")
+                        print(f"⚠️ JPY建て自動ロット計算エラー。固定ロット {entrypoint['amount']} を使用します")
+                        main_volume = entrypoint['amount']
         else:
             logger.debug("autolot分岐に入らなかった。固定ロットを使用")
             main_volume = entrypoint['amount']
-        if main_volume == 0.1:
-            logger.error("main_volumeが0.1のままです。autolot計算が正しく動作していません！")
+        
+        # 安全チェック: 異常に大きな数量を検出
+        MAX_SAFE_VOLUME = 1000000  # 100万通貨（10ロット）を上限とする
+        if main_volume > MAX_SAFE_VOLUME:
+            print(f"⚠️ 計算された数量が異常に大きいです: {main_volume:,}通貨")
+            print(f"⚠️ 安全のため、固定ロット {entrypoint['amount']} を使用します")
+            logger.warning(f"異常な数量を検出: {main_volume} → 固定ロット {entrypoint['amount']} に変更")
+            main_volume = entrypoint['amount']
+        
+        # デバッグ情報を出力
+        print(f"計算された注文数量: {main_volume:,}通貨 (約{main_volume/100000:.2f}ロット)")
         
         # どんな場合でも注文数量が最小値未満なら補正
         MIN_VOLUME = 1000

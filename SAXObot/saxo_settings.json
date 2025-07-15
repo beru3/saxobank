@@ -21,10 +21,10 @@
   },
   "trading": {
     "is_live_mode": false,
-    "leverage": 20,
-    "autolot": true,
+    "leverage": 1,
+    "autolot": false,
     "max_error_count": 5,
-    "lot_size": 1
+    "lot_size": 0.1
   },
   "notification": {
     "discord_webhook_url": "https://discord.com/api/webhooks/1394822287093399582/atRtJIDiOGtCzLt3nBzzLID-B6i58EwAXCqSBwbkcB3RbHvFnH_LkNYl5_TPMgQD3U4B"
