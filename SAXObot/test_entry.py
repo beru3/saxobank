@@ -196,21 +196,24 @@ async def run_test_entry():
         
         if closed_position:
             closed_info = closed_position.get('ClosedPosition', {})
-            close_price = closed_info.get('ClosePrice')
-            pnl = closed_info.get('ProfitLossInBaseCurrency')
+            close_price = closed_info.get('ClosingPrice')  # ClosePriceではなくClosingPrice
+            pnl = closed_info.get('ClosedProfitLossInBaseCurrency')  # 正しいフィールド名
             
             print(f"\n=== 取引結果 ===")
             print(f"エントリー価格: {open_price}")
             print(f"決済価格: {close_price}")
             print(f"損益: {pnl}")
             
-            # pips計算
-            if ticker[-3:] == "JPY":
-                pips = (float(close_price) - float(open_price)) * 100 if direction == "BUY" else (float(open_price) - float(close_price)) * 100
+            # pips計算（Noneチェックを追加）
+            if close_price is not None and open_price is not None:
+                if ticker[-3:] == "JPY":
+                    pips = (float(close_price) - float(open_price)) * 100 if direction == "BUY" else (float(open_price) - float(close_price)) * 100
+                else:
+                    pips = (float(close_price) - float(open_price)) * 10000 if direction == "BUY" else (float(open_price) - float(close_price)) * 10000
+                    
+                print(f"pips: {pips:.1f}")
             else:
-                pips = (float(close_price) - float(open_price)) * 10000 if direction == "BUY" else (float(open_price) - float(close_price)) * 10000
-                
-            print(f"pips: {pips:.1f}")
+                print("価格情報が不完全なため、pips計算をスキップします")
         
     except Exception as e:
         print(f"エラーが発生しました: {e}")

@@ -2911,6 +2911,7 @@ async def process_entrypoint(entrypoint, config, bot, trade_results):
                         
                         print(f"  決済詳細: {pips:.3f}pips, 損益{profit_loss_in_base_currency:.0f}円")
                         print(f"  決済価格: {close_price}, 決済時刻: {close_time_str}")
+                        print(f"  📊 エントリー結果: {entrypoint['ticker']} {closed_info['direction']} {pips:.3f}pips")
                         
                         if entrypoint['line_notify'].upper() == 'TRUE' and discord_key:
                             await SAXOlib.send_discord_message(
@@ -2951,6 +2952,7 @@ async def process_entrypoint(entrypoint, config, bot, trade_results):
                             total_profit_loss += loss_gain
                             
                             print(f"  → 決済完了: {pips:.3f}pips, 損益{loss_gain:.0f}円（概算）")
+                            print(f"  📊 エントリー結果: {entrypoint['ticker']} {closed_info['direction']} {pips:.3f}pips（概算）")
                             
                             if entrypoint['line_notify'].upper() == 'TRUE' and discord_key:
                                 await SAXOlib.send_discord_message(
@@ -3041,7 +3043,7 @@ async def send_daily_summary(trade_results, discord_key):
         
         summary += f"{i+1}. {trade['ticker']} {trade['direction']} "
         summary += f"({entry_time}-{exit_time}) 決済時刻:{close_time}\n"
-        summary += f"   {pips:.1f}pips {profit:.0f}円 - {trade['memo']}\n"
+        summary += f"   {pips:+.3f}pips {profit:+.0f}円 - {trade['memo']}\n"
         
         # トレンド情報を追加（メモに含まれている場合）
         if "トレンド" in trade['memo']:
@@ -3055,7 +3057,7 @@ async def send_daily_summary(trade_results, discord_key):
     summary += f"\n📊 統計:\n"
     summary += f"取引数: {total_trades} (勝: {win_count}, 負: {lose_count})\n"
     summary += f"勝率: {win_rate:.1f}%\n"
-    summary += f"合計: {total_pips:.1f}pips {total_profit:.0f}円"
+    summary += f"合計: {total_pips:+.3f}pips {total_profit:+.0f}円"
     
     # Discordに送信
     await SAXOlib.send_discord_message(discord_key, summary)
@@ -3243,8 +3245,44 @@ async def run():
                     await process_entrypoint(entrypoint, settings, bot, trade_results)
                 
                 # すべての取引が完了した後に日次サマリーを送信
-                if discord_key and trade_results:
-                    await send_daily_summary(trade_results, discord_key)
+                if trade_results:
+                    # 合計pipsと損益を計算
+                    total_pips = sum(trade.get('pips', 0) for trade in trade_results)
+                    total_profit = sum(trade.get('profit_loss', 0) for trade in trade_results)
+                    win_count = sum(1 for trade in trade_results if trade.get('pips', 0) > 0)
+                    lose_count = sum(1 for trade in trade_results if trade.get('pips', 0) < 0)
+                    
+                    # コンソールに日次サマリーを表示
+                    print(f"\n{'='*60}")
+                    print(f"📊 {datetime.now().strftime('%Y-%m-%d')} 日次取引サマリー")
+                    print(f"{'='*60}")
+                    print(f"取引数: {len(trade_results)} (勝: {win_count}, 負: {lose_count})")
+                    print(f"勝率: {(win_count / len(trade_results) * 100):.1f}%" if trade_results else "勝率: 0.0%")
+                    print(f"合計pips: {total_pips:.3f}")
+                    print(f"合計損益: {total_profit:.0f}円")
+                    print(f"{'='*60}")
+                    
+                    # 各取引の詳細を表示
+                    print("\n📋 取引詳細:")
+                    for i, trade in enumerate(trade_results):
+                        pips = trade.get('pips', 0)
+                        profit = trade.get('profit_loss', 0)
+                        entry_time = trade.get('entry_time', '??:??')
+                        exit_time = trade.get('exit_time', '??:??')
+                        close_time = trade.get('close_time', '??:??')
+                        
+                        print(f"{i+1:2d}. {trade['ticker']} {trade['direction']} ({entry_time}-{exit_time}) 決済:{close_time}")
+                        print(f"    {pips:+.3f}pips {profit:+.0f}円 - {trade['memo']}")
+                    
+                    # Discordにサマリーを送信
+                    if discord_key:
+                        await send_daily_summary(trade_results, discord_key)
+                else:
+                    print(f"\n{'='*60}")
+                    print(f"📊 {datetime.now().strftime('%Y-%m-%d')} 取引結果")
+                    print(f"{'='*60}")
+                    print("今日は取引が実行されませんでした。")
+                    print(f"{'='*60}")
                 
                 # エンドレスモードでない場合は終了
                 if not endless_mode:
