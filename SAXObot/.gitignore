@@ -23,6 +23,9 @@ MANIFEST
 
 # Virtual Environment
 saxobot_env_py39/
+saxobot_mac_env/
+test_env/
+saxobot_venv/
 venv/
 env/
 ENV/

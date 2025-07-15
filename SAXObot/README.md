@@ -66,11 +66,30 @@ python SAXObot.py
 
 ## ファイル構成
 
-- `SAXObot.py`: メイン実行ファイル
-- `SAXOlib.py`: SAXO証券API操作ライブラリ
-- `saxo_token_oauth.py`: OAuth認証処理
-- `saxo_settings.json`: 設定ファイル
-- `SAXOtrade.bat`: Windows自動実行用バッチファイル
+```
+SAXObot/
+├── SAXObot.py              # メイン実行ファイル
+├── SAXOlib.py              # SAXO証券API操作ライブラリ
+├── saxo_token_oauth.py     # OAuth認証処理
+├── saxo_token_async.py     # 従来の認証処理
+├── saxo_settings.json      # 設定ファイル
+├── requirements.txt        # 依存関係
+├── tests/                  # テストファイル
+│   ├── test_entry.py       # 基本エントリーテスト
+│   ├── test_spreadsheet_entry.py  # スプレッドシート読み込みテスト
+│   ├── test_manual_entry.py       # 手動エントリーテスト
+│   ├── test_real_entrypoints.py   # 実際のエントリーポイントテスト
+│   ├── test_entrypoints_only.py   # エントリーポイントのみテスト
+│   ├── test_load_entrypoints.py   # エントリーポイント読み込みテスト
+│   └── setup_saxo.py       # セットアップスクリプト
+├── scripts/                # 実行スクリプト
+│   ├── run_saxobot.bat     # SAXObot実行バッチ
+│   └── SAXOtrade.bat       # 自動実行用バッチ
+└── docs/                   # ドキュメント
+    ├── README.md           # このファイル
+    ├── SAXOBOT_ENV_README.md  # 環境構築ガイド
+    └── SAXO bot インストール方法SAXO設定編.pdf  # インストールガイド
+```
 
 ## 注意事項
 
