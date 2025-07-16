@@ -2070,42 +2070,6 @@ async def process_entrypoint(entrypoint, config, bot, trade_results, entry_label
         # Discord Webhook URLを取得
         discord_key = config.get("notification", {}).get("discord_webhook_url", "")
         
-        # トレンド情報取得（SAXOではUSDJPYのトレンドで判断）
-        trend_direction, trend_info = await SAXOlib.trend_get("USD_JPY")
-        if trend_direction == 1:
-            if entrypoint['direction'].upper() == 'BUY':
-                trend_message = f"{entrypoint['ticker']}は上昇トレンドをフォロー ({trend_info})"
-                if discord_key:
-                    await SAXOlib.send_discord_message(discord_key, trend_message)
-                print("上昇トレンドフォロー")
-            else:
-                trend_message = f"{entrypoint['ticker']}は上昇トレンドと逆行 ({trend_info})"
-                if discord_key:
-                    await SAXOlib.send_discord_message(discord_key, trend_message)
-                print("上昇トレンド逆行")
-        elif trend_direction == -1:
-            if entrypoint['direction'].upper() == 'SELL':
-                trend_message = f"{entrypoint['ticker']}は下降トレンドをフォロー ({trend_info})"
-                if discord_key:
-                    await SAXOlib.send_discord_message(discord_key, trend_message)
-                print("下降トレンドフォロー")
-            else:
-                trend_message = f"{entrypoint['ticker']}は下降トレンドと逆行 ({trend_info})"
-                if discord_key:
-                    await SAXOlib.send_discord_message(discord_key, trend_message)
-                print("下降トレンド逆行")
-        else:
-            trend_message = f"{entrypoint['ticker']}はレンジ ({trend_info})"
-            if discord_key:
-                await SAXOlib.send_discord_message(discord_key, trend_message)
-            print("レンジ")
-        
-        # トレンド情報をメモに追加
-        if 'memo' in entrypoint:
-            entrypoint['memo'] = f"{entrypoint['memo']} | {trend_message}"
-        else:
-            entrypoint['memo'] = trend_message
-        
         # 現在価格を取得（この時点でUICも取得される）
         price_info = await bot.get_price(entrypoint['ticker'])
         if not price_info:
@@ -2422,22 +2386,10 @@ async def process_entrypoint(entrypoint, config, bot, trade_results, entry_label
         
         # 通知（発注時間を含めるように修正）
         if entrypoint['line_notify'].upper() == 'TRUE' and discord_key:
-            if config.get('autolot', 'FALSE').upper() == 'TRUE':
-                message = f"建玉 {entrypoint['ticker']} {entrypoint['direction']} {entrypoint['entry_time'].strftime('%H:%M:%S')}-{entrypoint['exit_time'].strftime('%H:%M:%S')}\n"
-                message += f"OrderID: {main_order_id}\n"
-                if open_time_str:
-                    message += f"発注時刻: {open_time_str}\n"
-                message += f"size(AutoLot){main_volume} Leverage {config['leverage']} price{main_order_price}"
-            else:
-                message = f"建玉 {entrypoint['ticker']} {entrypoint['direction']} {entrypoint['entry_time'].strftime('%H:%M:%S')}-{entrypoint['exit_time'].strftime('%H:%M:%S')}\n"
-                message += f"OrderID: {main_order_id}\n"
-                if open_time_str:
-                    message += f"発注時刻: {open_time_str}\n"
-                message += f"size{entrypoint['amount']} price{main_order_price}"
-            
-            if sl_price != 0:
-                message += f" sl_price{sl_price}"
-            message += f"\nmemo{entrypoint['memo']}"
+            message = f"✅ 建玉発注\n"
+            message += f"{entrypoint['ticker']} {entrypoint['direction']} {entrypoint['entry_time'].strftime('%H:%M:%S')}-{entrypoint['exit_time'].strftime('%H:%M:%S')}\n"
+            message += f"注文ID: {main_order_id} | 発注時刻: {open_time_str if open_time_str else '取得不可'}\n"
+            message += f"数量: {main_volume/100000:.1f}ロット | 価格: {main_order_price}"
             
             await SAXOlib.send_discord_message(discord_key, message)
         
@@ -2621,6 +2573,21 @@ async def process_entrypoint(entrypoint, config, bot, trade_results, entry_label
                         f"決済時刻: {close_time_str}\n"
                         f"entPrice{main_order_price} closePrice{close_price}\n"
                         f"memo {entrypoint['memo']}")
+                
+                # 決済完了のDiscord通知を追加
+                if entrypoint['line_notify'].upper() == 'TRUE' and discord_key:
+                    # 決済注文IDを取得（closed_infoから）
+                    close_order_id = closed_info.get('close_order_id', '取得不可')
+                    
+                    message = f"📊 決済完了\n"
+                    message += f"{entrypoint['ticker']} {closed_info['direction']} {entrypoint['entry_time'].strftime('%H:%M:%S')}-{entrypoint['exit_time'].strftime('%H:%M:%S')}\n"
+                    message += f"注文ID: {close_order_id} | 決済時刻: {close_time_str}\n"
+                    message += f"数量: {closed_info['amount']/100000:.1f}ロット | 価格: {close_price}\n\n"
+                    message += f"💰結果\n"
+                    message += f"損益: {pips:+.1f}pips ({profit_loss_in_base_currency:+.0f}円)\n"
+                    message += f"{closed_info['open_price']} → {close_price}"
+                    
+                    await SAXOlib.send_discord_message(discord_key, message)
             else:
                 # 決済履歴が取得できない場合（従来の処理）
                 print("決済履歴が取得できませんでした")
@@ -2653,18 +2620,26 @@ async def process_entrypoint(entrypoint, config, bot, trade_results, entry_label
                     print(f"SL決済（推定）: {estimated_pips:.1f}pips, 損益{estimated_profit_loss:.0f}円")
                     
                     if entrypoint['line_notify'].upper() == 'TRUE' and discord_key:
-                        await SAXOlib.send_discord_message(
-                            discord_key,
-                            f"SLで決済されています（推定）。\n"
-                            f"決済 {entrypoint['ticker']} {entrypoint['direction']} {entrypoint['entry_time'].strftime('%H:%M')}-{entrypoint['exit_time'].strftime('%H:%M')}\n"
-                            f"{estimated_pips:.1f}pips 損益{estimated_profit_loss:.0f}円（推定）\n"
-                            f"entPrice{main_order_price} SLPrice{sl_price}\n"
-                            f"memo {entrypoint['memo']}")
+                        message = f"📊 決済完了（SL推定）\n"
+                        message += f"{entrypoint['ticker']} {entrypoint['direction']} {entrypoint['entry_time'].strftime('%H:%M:%S')}-{entrypoint['exit_time'].strftime('%H:%M:%S')}\n"
+                        message += f"注文ID: 取得不可 | 決済時刻: {datetime.now().strftime('%H:%M:%S')}\n"
+                        message += f"数量: {main_volume/100000:.1f}ロット | 価格: {sl_price}\n\n"
+                        message += f"💰結果（推定）\n"
+                        message += f"損益: {estimated_pips:+.1f}pips ({estimated_profit_loss:+.0f}円)\n"
+                        message += f"{main_order_price} → {sl_price}"
+                        
+                        await SAXOlib.send_discord_message(discord_key, message)
                 else:
                     if entrypoint['line_notify'].upper() == 'TRUE' and discord_key:
-                        await SAXOlib.send_discord_message(
-                            discord_key,
-                            f"SLで決済されています。\n決済 {entrypoint['ticker']} {entrypoint['direction']} {entrypoint['entry_time']}-{entrypoint['exit_time']}\nmemo {entrypoint['memo']}")
+                        message = f"📊 決済完了（SL）\n"
+                        message += f"{entrypoint['ticker']} {entrypoint['direction']} {entrypoint['entry_time'].strftime('%H:%M:%S')}-{entrypoint['exit_time'].strftime('%H:%M:%S')}\n"
+                        message += f"注文ID: 取得不可 | 決済時刻: {datetime.now().strftime('%H:%M:%S')}\n"
+                        message += f"数量: 不明 | 価格: 不明\n\n"
+                        message += f"💰結果\n"
+                        message += f"損益: 不明\n"
+                        message += f"価格: 不明"
+                        
+                        await SAXOlib.send_discord_message(discord_key, message)
             return
         
         # 判定時刻まで待機
@@ -2880,6 +2855,17 @@ async def process_entrypoint(entrypoint, config, bot, trade_results, entry_label
                 }
                 trade_results.append(trade_result)
                 logging.info(f"[CLOSE] trade_results記録: {trade_result}")
+                
+                # 決済完了のDiscord通知を追加
+                if entrypoint['line_notify'].upper() == 'TRUE' and discord_key:
+                    await SAXOlib.send_discord_message(
+                        discord_key,
+                        f"決済完了\n"
+                        f"決済 {entrypoint['ticker']} {closed_info['direction']} {entrypoint['entry_time'].strftime('%H:%M')}-{entrypoint['exit_time'].strftime('%H:%M')}\n"
+                        f"{pips:+.1f}pips 損益{profit_loss_in_base_currency:+.0f}円\n"
+                        f"決済時刻: {close_time_str}\n"
+                        f"entPrice{closed_info['open_price']} closePrice{close_price}\n"
+                        f"memo {memo}")
         print("決済処理完了")
         logging.info('  +エントリー完了')
         
