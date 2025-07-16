@@ -427,8 +427,23 @@ class SaxoBot:
             print("APIクライアントを再初期化中...")
             self._initialize_client()
             
-            # 新しいトークンでテスト
-            if await self.test_connection():
+            # 接続安定化のため少し待機
+            print("接続安定化のため3秒待機中...")
+            await asyncio.sleep(3)
+            
+            # 新しいトークンでテスト（複数回試行）
+            test_success = False
+            for test_attempt in range(3):
+                print(f"接続テスト試行 {test_attempt + 1}/3...")
+                if await self.test_connection():
+                    test_success = True
+                    break
+                else:
+                    if test_attempt < 2:
+                        print("接続テスト失敗。2秒後に再試行...")
+                        await asyncio.sleep(2)
+            
+            if test_success:
                 print("✓ トークンの更新が完了しました")
                 logging.info("トークンの更新が完了しました")
                 
@@ -1222,100 +1237,117 @@ class SaxoBot:
             logging.error(f"指値注文発注エラー: {e}")
             return None
         
-    async def get_positions(self, ticker=None):
-        """ポジション情報を取得（部分約定対応版）"""
-        try:
-            loop = asyncio.get_event_loop()
-            
-            def sync_get_positions():
-                params = {'ClientKey': self.client_key}
-                # FieldGroupsは指定しない（全情報を取得するため）
-                r = pf.positions.PositionsMe(params=params)
-                return self.client.request(r)
-            
-            response = await loop.run_in_executor(self.executor, sync_get_positions)
-            
-            if response and ticker and 'Data' in response:
-                # 特定の通貨ペアのポジションのみ抽出
-                filtered_positions = []
+    async def get_positions(self, ticker=None, max_retries=3):
+        """ポジション情報を取得（リトライ機能付き）"""
+        for retry in range(max_retries):
+            try:
+                loop = asyncio.get_event_loop()
                 
-                # ティッカーを SAXO形式に変換（USD_JPY → USDJPY）
-                saxo_ticker = ticker.replace("_", "")
+                def sync_get_positions():
+                    params = {'ClientKey': self.client_key}
+                    # FieldGroupsは指定しない（全情報を取得するため）
+                    r = pf.positions.PositionsMe(params=params)
+                    return self.client.request(r)
                 
-                # 該当通貨ペアのUICを取得
-                instrument_info = await self.get_instrument_details(ticker)
-                expected_uic = instrument_info['Uic'] if instrument_info else None
+                response = await loop.run_in_executor(self.executor, sync_get_positions)
                 
-                # 同じ注文IDから生成されたポジションをグループ化
-                positions_by_order = {}
-                
-                for idx, pos in enumerate(response['Data']):
-                    # ポジション情報の構造を詳細にチェック
-                    pos_base = pos.get('PositionBase', {})
+                if response and ticker and 'Data' in response:
+                    # 特定の通貨ペアのポジションのみ抽出
+                    filtered_positions = []
                     
-                    # SourceOrderIdで関連ポジションをグループ化
-                    source_order_id = pos_base.get('SourceOrderId', '')
+                    # ティッカーを SAXO形式に変換（USD_JPY → USDJPY）
+                    saxo_ticker = ticker.replace("_", "")
                     
-                    # 最初のポジションの構造をログ出力（デバッグ用）
-                    if idx == 0 and len(filtered_positions) == 0:
-                        logging.info(f"ポジション構造の詳細: {json.dumps(pos, indent=2)}")
-                        # 時間関連のフィールドを探す
-                        logging.info("時間関連フィールドの探索:")
-                        for key in pos_base.keys():
-                            if 'time' in key.lower() or 'date' in key.lower():
-                                logging.info(f"  {key}: {pos_base.get(key)}")
-                        # トップレベルでも探す
-                        for key in pos.keys():
-                            if 'time' in key.lower() or 'date' in key.lower():
-                                logging.info(f"  (top) {key}: {pos.get(key)}")
+                    # 該当通貨ペアのUICを取得
+                    instrument_info = await self.get_instrument_details(ticker)
+                    expected_uic = instrument_info['Uic'] if instrument_info else None
                     
-                    # NetPositionIdから通貨ペアを判定
-                    net_position_id = pos.get('NetPositionId', '')
+                    # 同じ注文IDから生成されたポジションをグループ化
+                    positions_by_order = {}
                     
-                    # AssetTypeとUicから判定
-                    asset_type = pos_base.get('AssetType', '')
-                    uic = pos_base.get('Uic', '')
-                    
-                    # 通貨ペアの判定（複数の方法で試行）
-                    matched = False
-                    
-                    # 1. NetPositionIdで判定（例: "EURJPY__FxSpot"）
-                    if net_position_id and saxo_ticker in net_position_id:
-                        matched = True
-                        logging.info(f"NetPositionIdで一致: {net_position_id}")
-                    
-                    # 2. UICで判定（動的に取得したUICと比較）
-                    if expected_uic and str(uic) == str(expected_uic):
-                        matched = True
-                        logging.info(f"UICで一致: {ticker} = Uic {uic}")
-                    
-                    # FxSpotタイプのポジションのみ対象
-                    if asset_type == "FxSpot" and matched:
-                        filtered_positions.append(pos)
+                    for idx, pos in enumerate(response['Data']):
+                        # ポジション情報の構造を詳細にチェック
+                        pos_base = pos.get('PositionBase', {})
                         
-                        # 注文IDでグループ化
-                        if source_order_id:
-                            if source_order_id not in positions_by_order:
-                                positions_by_order[source_order_id] = []
-                            positions_by_order[source_order_id].append(pos)
-                
-                # 部分約定の情報をログ出力
-                for order_id, positions in positions_by_order.items():
-                    if len(positions) > 1:
-                        total_amount = sum(abs(p['PositionBase']['Amount']) for p in positions)
-                        logging.info(f"部分約定検出: OrderID={order_id}, ポジション数={len(positions)}, 合計数量={total_amount}")
-                        for p in positions:
-                            pb = p['PositionBase']
-                            logging.info(f"  - PositionID={p['PositionId']}, Amount={pb['Amount']}, OpenPrice={pb['OpenPrice']}")
+                        # SourceOrderIdで関連ポジションをグループ化
+                        source_order_id = pos_base.get('SourceOrderId', '')
                         
-                response['Data'] = filtered_positions
-            
-            return response
-            
-        except Exception as e:
-            logging.error(f"ポジション取得エラー: {e}")
-            logging.error(f"詳細: {traceback.format_exc()}")
-            return None
+                        # 最初のポジションの構造をログ出力（デバッグ用）
+                        if idx == 0 and len(filtered_positions) == 0:
+                            logging.info(f"ポジション構造の詳細: {json.dumps(pos, indent=2)}")
+                            # 時間関連のフィールドを探す
+                            logging.info("時間関連フィールドの探索:")
+                            for key in pos_base.keys():
+                                if 'time' in key.lower() or 'date' in key.lower():
+                                    logging.info(f"  {key}: {pos_base.get(key)}")
+                            # トップレベルでも探す
+                            for key in pos.keys():
+                                if 'time' in key.lower() or 'date' in key.lower():
+                                    logging.info(f"  (top) {key}: {pos.get(key)}")
+                        
+                        # NetPositionIdから通貨ペアを判定
+                        net_position_id = pos.get('NetPositionId', '')
+                        
+                        # AssetTypeとUicから判定
+                        asset_type = pos_base.get('AssetType', '')
+                        uic = pos_base.get('Uic', '')
+                        
+                        # 通貨ペアの判定（複数の方法で試行）
+                        matched = False
+                        
+                        # 1. NetPositionIdで判定（例: "EURJPY__FxSpot"）
+                        if net_position_id and saxo_ticker in net_position_id:
+                            matched = True
+                            logging.info(f"NetPositionIdで一致: {net_position_id}")
+                        
+                        # 2. UICで判定（動的に取得したUICと比較）
+                        if expected_uic and str(uic) == str(expected_uic):
+                            matched = True
+                            logging.info(f"UICで一致: {ticker} = Uic {uic}")
+                        
+                        # FxSpotタイプのポジションのみ対象
+                        if asset_type == "FxSpot" and matched:
+                            filtered_positions.append(pos)
+                            
+                            # 注文IDでグループ化
+                            if source_order_id:
+                                if source_order_id not in positions_by_order:
+                                    positions_by_order[source_order_id] = []
+                                positions_by_order[source_order_id].append(pos)
+                
+                    # 部分約定の情報をログ出力
+                    for order_id, positions in positions_by_order.items():
+                        if len(positions) > 1:
+                            total_amount = sum(abs(p['PositionBase']['Amount']) for p in positions)
+                            logging.info(f"部分約定検出: OrderID={order_id}, ポジション数={len(positions)}, 合計数量={total_amount}")
+                            for p in positions:
+                                pb = p['PositionBase']
+                                logging.info(f"  - PositionID={p['PositionId']}, Amount={pb['Amount']}, OpenPrice={pb['OpenPrice']}")
+                            
+                    response['Data'] = filtered_positions
+                
+                return response
+                
+            except Exception as e:
+                logging.error(f"ポジション取得エラー (試行{retry+1}/{max_retries}): {e}")
+                
+                # 接続エラーの場合はリトライ
+                if "Connection" in str(e) or "RemoteDisconnected" in str(e):
+                    if retry < max_retries - 1:
+                        wait_time = (retry + 1) * 2  # 2秒、4秒、6秒と待機時間を増加
+                        logging.info(f"接続エラーのため{wait_time}秒後にリトライします...")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    else:
+                        logging.error(f"最大リトライ回数に達しました: {max_retries}")
+                        logging.error(f"詳細: {traceback.format_exc()}")
+                        return None
+                else:
+                    # 接続エラー以外の場合は詳細ログを出力して終了
+                    logging.error(f"詳細: {traceback.format_exc()}")
+                    return None
+        
+        return None
     
     async def get_orders(self, ticker=None):
         """未約定注文を取得（改善版）"""
@@ -2016,11 +2048,23 @@ async def process_entrypoint(entrypoint, config, bot, trade_results, entry_label
     main_volume = None
     
     try:
+        # エントリー直前のトークンリフレッシュ制御
+        now = datetime.now()
+        entry_time = entrypoint["entry_time"]
+        time_diff = (entry_time - now).total_seconds()
+        # 2分以上前で、かつ有効期限が5分未満ならリフレッシュ
+        if time_diff > 120:
+            token_status = await bot.get_token_status()
+            if token_status["needs_refresh"]:
+                print("エントリー2分以上前なので、余裕をもってトークンをリフレッシュします")
+                await bot.refresh_token()
+        elif time_diff < 60:
+            print("エントリー1分前以降はトークンリフレッシュを行いません")
+
         # エントリー時間と現在時刻を比較
         now = datetime.now()
         entry_time = entrypoint["entry_time"]
         time_diff = (entry_time - now).total_seconds()
-        
         if time_diff > 0:
             msg = f"エントリー時間 {entry_time.strftime('%H:%M:%S')} まで待機します（あと {time_diff:.0f} 秒）"
             if entry_label:
@@ -2385,7 +2429,7 @@ async def process_entrypoint(entrypoint, config, bot, trade_results, entry_label
             message = f"✅ 建玉発注\n"
             message += f"{entrypoint['ticker']} {entrypoint['direction']} {entrypoint['entry_time'].strftime('%H:%M:%S')}-{entrypoint['exit_time'].strftime('%H:%M:%S')}\n"
             message += f"注文ID: {main_order_id} | 発注時刻: {open_time_str if open_time_str else '取得不可'}\n"
-            message += f"数量: {main_volume/100000:.1f}ロット | 価格: {main_order_price}"
+            message += f"数量: {main_volume/100000:.2f}ロット | 価格: {main_order_price}"
             
             await SAXOlib.send_discord_message(discord_key, message)
         
@@ -2561,14 +2605,15 @@ async def process_entrypoint(entrypoint, config, bot, trade_results, entry_label
                 })
                 
                 if entrypoint['line_notify'].upper() == 'TRUE' and discord_key:
-                    await SAXOlib.send_discord_message(
-                        discord_key,
-                        f"SLで決済されました\n"
-                        f"決済 {entrypoint['ticker']} {entrypoint['direction']} {entrypoint['entry_time'].strftime('%H:%M')}-{entrypoint['exit_time'].strftime('%H:%M')}\n"
-                        f"{pips:.1f}pips 損益{profit_loss_in_base_currency:.0f}円\n"
-                        f"決済時刻: {close_time_str}\n"
-                        f"entPrice{main_order_price} closePrice{close_price}\n"
-                        f"memo {entrypoint['memo']}")
+                    message = f"📊 決済完了（SL）\n"
+                    message += f"{entrypoint['ticker']} {entrypoint['direction']} {entrypoint['entry_time'].strftime('%H:%M:%S')}-{entrypoint['exit_time'].strftime('%H:%M:%S')}\n"
+                    message += f"注文ID: 取得不可 | 決済時刻: {close_time_str}\n"
+                    message += f"数量: {main_volume/100000:.2f}ロット | 価格: {close_price}\n\n"
+                    message += f"💰結果\n"
+                    message += f"損益: {pips:+.1f}pips ({profit_loss_in_base_currency:+.0f}円)\n"
+                    message += f"{main_order_price} → {close_price}"
+                    
+                    await SAXOlib.send_discord_message(discord_key, message)
                 
                 # 決済完了のDiscord通知を追加
                 if entrypoint['line_notify'].upper() == 'TRUE' and discord_key:
@@ -2578,7 +2623,7 @@ async def process_entrypoint(entrypoint, config, bot, trade_results, entry_label
                     message = f"📊 決済完了\n"
                     message += f"{entrypoint['ticker']} {closed_info['direction']} {entrypoint['entry_time'].strftime('%H:%M:%S')}-{entrypoint['exit_time'].strftime('%H:%M:%S')}\n"
                     message += f"注文ID: {close_order_id} | 決済時刻: {close_time_str}\n"
-                    message += f"数量: {closed_info['amount']/100000:.1f}ロット | 価格: {close_price}\n\n"
+                    message += f"数量: {closed_info['amount']/100000:.2f}ロット | 価格: {close_price}\n\n"
                     message += f"💰結果\n"
                     message += f"損益: {pips:+.1f}pips ({profit_loss_in_base_currency:+.0f}円)\n"
                     message += f"{closed_info['open_price']} → {close_price}"
@@ -2619,7 +2664,7 @@ async def process_entrypoint(entrypoint, config, bot, trade_results, entry_label
                         message = f"📊 決済完了（SL推定）\n"
                         message += f"{entrypoint['ticker']} {entrypoint['direction']} {entrypoint['entry_time'].strftime('%H:%M:%S')}-{entrypoint['exit_time'].strftime('%H:%M:%S')}\n"
                         message += f"注文ID: 取得不可 | 決済時刻: {datetime.now().strftime('%H:%M:%S')}\n"
-                        message += f"数量: {main_volume/100000:.1f}ロット | 価格: {sl_price}\n\n"
+                        message += f"数量: {main_volume/100000:.2f}ロット | 価格: {sl_price}\n\n"
                         message += f"💰結果（推定）\n"
                         message += f"損益: {estimated_pips:+.1f}pips ({estimated_profit_loss:+.0f}円)\n"
                         message += f"{main_order_price} → {sl_price}"
@@ -2854,14 +2899,18 @@ async def process_entrypoint(entrypoint, config, bot, trade_results, entry_label
                 
                 # 決済完了のDiscord通知を追加
                 if entrypoint['line_notify'].upper() == 'TRUE' and discord_key:
-                    await SAXOlib.send_discord_message(
-                        discord_key,
-                        f"決済完了\n"
-                        f"決済 {entrypoint['ticker']} {closed_info['direction']} {entrypoint['entry_time'].strftime('%H:%M')}-{entrypoint['exit_time'].strftime('%H:%M')}\n"
-                        f"{pips:+.1f}pips 損益{profit_loss_in_base_currency:+.0f}円\n"
-                        f"決済時刻: {close_time_str}\n"
-                        f"entPrice{closed_info['open_price']} closePrice{close_price}\n"
-                        f"memo {memo}")
+                    # 決済注文IDを取得（closed_infoから）
+                    close_order_id = closed_info.get('close_order_id', '取得不可')
+                    
+                    message = f"📊 決済完了\n"
+                    message += f"{entrypoint['ticker']} {closed_info['direction']} {entrypoint['entry_time'].strftime('%H:%M:%S')}-{entrypoint['exit_time'].strftime('%H:%M:%S')}\n"
+                    message += f"注文ID: {close_order_id} | 決済時刻: {close_time_str}\n"
+                    message += f"数量: {closed_info['amount']/100000:.2f}ロット | 価格: {close_price}\n\n"
+                    message += f"💰結果\n"
+                    message += f"損益: {pips:+.1f}pips ({profit_loss_in_base_currency:+.0f}円)\n"
+                    message += f"{closed_info['open_price']} → {close_price}"
+                    
+                    await SAXOlib.send_discord_message(discord_key, message)
         print("決済処理完了")
         logging.info('  +エントリー完了')
         
