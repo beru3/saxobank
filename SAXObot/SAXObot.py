@@ -2212,7 +2212,7 @@ async def process_entrypoint(entrypoint, config, bot, trade_results, entry_label
                 print(f"スプレッドが{splimit}以上なので注文見送り")
                 if entrypoint['line_notify'].upper() == 'TRUE' and discord_key:
                     await SAXOlib.send_discord_message(
-                        discord_key, f"スプレッドが{splimit}以上なので注文見送り")
+                        discord_key, f"⚠️ スプレッド警告\n{entrypoint['ticker']} - Bid: {bid}, Ask: {ask}\nスプレッド: {spread}pips（{splimit}pips以上）\n注文を見送りました")
                 return
         
         # エントリー時刻まで待機
