@@ -2206,10 +2206,6 @@ async def process_entrypoint(entrypoint, config, bot, trade_results, entry_label
             spread = round((abs(float(bid) - float(ask)) * multiply), 3)
             print(f"{entrypoint['ticker']} - Bid: {bid}, Ask: {ask} Spread: {spread}")
             
-            if entrypoint['line_notify'].upper() == 'TRUE' and discord_key:
-                await SAXOlib.send_discord_message(
-                    discord_key, f"{entrypoint['ticker']} - Bid: {bid}, Ask: {ask} Spread: {spread}")
-            
             # スプレッドチェック
             splimit = 5  # 注文しないスプレッドをpipsで設定
             if splimit > 0 and spread >= splimit:
